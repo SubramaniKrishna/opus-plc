@@ -4,7 +4,7 @@ from plc_loader import PLCLoader
 parser = argparse.ArgumentParser(description='Train a PLC model')
 
 parser.add_argument('features', metavar='<features file>', help='binary features file (float32)')
-# parser.add_argument('lost_file', metavar='<packet loss file>', help='packet loss traces (int8)')
+parser.add_argument('lost_file', metavar='<packet loss file>', help='packet loss traces (int8)')
 parser.add_argument('output', metavar='<output>', help='trained model file (.h5)')
 parser.add_argument('--model', metavar='<model>', default='plc_network', help='PLC model python definition (without .py)')
 group1 = parser.add_mutually_exclusive_group()
@@ -35,7 +35,7 @@ import tensorflow.keras.backend as K
 import h5py
 
 import tensorflow as tf
-#gpus = tf.config.experimental.list_physical_devices('GPU')
+gpus = tf.config.experimental.list_physical_devices('GPU')
 #if gpus:
 #  try:
 #    tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=5120)])
@@ -131,7 +131,7 @@ opt = Adam(lr, decay=decay, beta_2=0.99)
 
 # with strategy.scope():
 model = lpcnet.new_lpcnet_plc_model(rnn_units=args.gru_size, batch_size=batch_size, training=True, quantize=quantize, cond_size=args.cond_size)
-model.compile(optimizer=opt, loss=plc_mdct_loss(), metrics=[plc_mdct_loss()],run_eagerly=True)
+model.compile(optimizer=opt, loss=plc_mdct_loss(), metrics=[plc_mdct_loss()])
 model.summary()
 
 
@@ -142,22 +142,22 @@ nb_burg_features = model.nb_burg_features
 sequence_size = args.seq_length
 
 # u for unquantised, load 16 bit PCM samples and convert to mu-law
-features = np.load("./feature_dump.npy")
-nb_sequences = features.shape[0]//sequence_size
-features = features[:nb_sequences*sequence_size,:]
-features = np.reshape(features, (nb_sequences, sequence_size, nb_features))
-lost = np.random.randint(2, size=(nb_sequences,sequence_size,1))
-print(features.shape,lost.shape)
-
-# features = np.memmap(feature_file, dtype='float32', mode='r')
-# nb_sequences = len(features)//(nb_features*sequence_size)//batch_size*batch_size
-# features = features[:nb_sequences*sequence_size*nb_features]
-
+# features = np.load("./feature_dump.npy")
+# nb_sequences = features.shape[0]//sequence_size
+# features = features[:nb_sequences*sequence_size,:]
 # features = np.reshape(features, (nb_sequences, sequence_size, nb_features))
+# lost = np.random.randint(2, size=(nb_sequences,sequence_size,1))
+# print(features.shape,lost.shape)
 
-# features = features[:, :, :nb_used_features+model.nb_burg_features]
+features = np.memmap(feature_file, dtype='float32', mode='r')
+nb_sequences = len(features)//(nb_features*sequence_size)//batch_size*batch_size
+features = features[:nb_sequences*sequence_size*nb_features]
 
-# lost = np.memmap(args.lost_file, dtype='int8', mode='r')
+features = np.reshape(features, (nb_sequences, sequence_size, nb_features))
+
+features = features[:, :, :nb_used_features+model.nb_burg_features]
+
+lost = np.memmap(args.lost_file, dtype='int8', mode='r')
 
 # dump models to disk as we go
 checkpoint = ModelCheckpoint('{}_{}_{}.h5'.format(args.output, args.gru_size, '{epoch:02d}'))
