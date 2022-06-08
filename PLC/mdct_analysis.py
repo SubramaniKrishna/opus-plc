@@ -20,7 +20,7 @@ ebandMeans = np.array([
 ])
 
 # Load Audio
-x = np.fromfile("/Users/krisub/Desktop/Datasets/comp_mono48.raw",dtype = np.short)/32768.0
+x = np.fromfile("../../datasets/tts_speech_negative_16k.sw",dtype = np.short)/32768.0
 
 # DC Rejection and Pre-emphasis
 c = (6.3*3/48000)
@@ -33,8 +33,8 @@ tD,mdct_normalized = mdct2bands(mdct_x,band_defs)
 log_tD = np.log2(tD) - ebandMeans[:21]
 
 # Save log Energies and Normalized MDCTs
-np.save("./comp_mono48_logE.npy",log_tD)
-np.save("./comp_mono48_normalized_mdct.npy",mdct_normalized)
+np.save("../datasets/tts_speech_negative_16k_logE.npy",log_tD)
+np.save("../datasets/tts_speech_negative_16k_logE_mdct.npy",mdct_normalized)
 
 
 

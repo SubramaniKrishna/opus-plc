@@ -29,12 +29,9 @@ mdct_recon_x = mdctbands2mdct(mdct_normalized,band_E_recon,band_defs)
 recon_x = imdct_ola(mdct_recon_x,N,H,log_tD.shape[0]*N)
 
 # Invert DC Rejection and Pre-emphasis
-c = (6.3*3/48000)
-recon_x = recon_x/32768.0
 recon_x = lfilter([1],[1,-0.85],recon_x)
-recon_x = lfilter([1,-(1-c)],[1,-1],recon_x) # DC Reject
 
-wavfile.write("./comp_mono48_recon.wav",48000,(recon_x*32768.0).astype(np.short))
+wavfile.write("./comp_mono48_recon.wav",48000,(recon_x).astype(np.short))
 
 
 

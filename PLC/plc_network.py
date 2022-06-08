@@ -37,6 +37,8 @@ constraint = WeightClip(0.992)
 def new_lpcnet_plc_model(rnn_units=256, nb_used_features=21, cond_size = 20,nb_burg_features=0, batch_size=128, training=False,quantize = False):
     
     feat = Input(shape=(None, nb_used_features+nb_burg_features), batch_size=batch_size)
+    # Decorrelate features using DCT
+    feat = tf.signal.dct(feat,type = 4)
     lost = Input(shape=(None, 1), batch_size=batch_size)
 
     fdense1 = Dense(cond_size, activation='tanh', name='plc_dense1')

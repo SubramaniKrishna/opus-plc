@@ -91,3 +91,66 @@ def mdctbands2mdct(mdct_bands,list_E,band_defs):
     for i in range(band_defs.shape[0] - 1):
         mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]] = mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]]*list_E[:,i][:,None]
     return mdct_bands_unnormalized
+
+def mdctbands2mdct_withplc(mdct_bands,list_E,band_defs,loss_trace,choice = 0):
+    """
+    Given energies, normalized MDCTs and trace file for lost packets, replace lost packets with previous packet mdcts
+    If choice = 0, use previous packet mdct
+    If choice = 1, randomly generate a unit vector for the mdct
+    If choice = 2, reconstruct using previous frame energy but current mdct
+    """
+    mdct_bands_unnormalized = np.copy(mdct_bands)
+    listE = np.copy(list_E)
+
+    for i in range(band_defs.shape[0] - 1):
+        mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]] = mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]]*list_E[:,i][:,None]
+    
+    inds =  np.where(loss_trace == 0)[0]
+    if inds.shape[0]!=0:
+        inds = np.delete(inds,0)
+    
+    # Prevent cheating for consecutive zeros with ground truth
+    for i in range(1,loss_trace.shape[0]):
+        if loss_trace[i] == 1:
+            continue
+        else:
+            listE[i,:] = listE[i - 1,:]
+
+    if choice == 0:
+        mdct_bands_unnormalized[inds,:] = mdct_bands_unnormalized[inds - 1,:]
+    elif choice == 1:
+        for i in range(band_defs.shape[0] - 1):
+            rV = np.random.randn(mdct_bands_unnormalized.shape[0],band_defs[i+1] - band_defs[i])
+            rV = rV/np.linalg.norm(rV,axis = 0)
+            mdct_bands_unnormalized[inds,band_defs[i]:band_defs[i+1]] = rV[inds,:]*listE[inds,i][:,None]
+    else:
+        for i in range(band_defs.shape[0] - 1):
+            mdct_bands_unnormalized[inds,band_defs[i]:band_defs[i+1]] = mdct_bands[inds,band_defs[i]:band_defs[i+1]]*listE[inds,i][:,None]
+
+    return mdct_bands_unnormalized
+
+def mdctbands2mdct_with_neuralplc(mdct_bands,list_E,list_E_neural,band_defs,loss_trace, choice = 0):
+    """
+    Given energies, normalized MDCTs and trace file for lost packets, along with corresponding 
+    If choice = 0, use current packet mdct
+    If choice = 1, randomly generate a unit vector for the mdct
+    """
+    mdct_bands_unnormalized = np.copy(mdct_bands)
+
+    for i in range(band_defs.shape[0] - 1):
+        mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]] = mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]]*list_E[:,i][:,None]
+    
+    inds =  np.where(loss_trace == 0)[0]
+    if inds.shape[0]!=0:
+        inds = np.delete(inds,0)
+
+    if choice == 0:
+        for i in range(band_defs.shape[0] - 1):
+            mdct_bands_unnormalized[inds,band_defs[i]:band_defs[i+1]] = mdct_bands[inds,band_defs[i]:band_defs[i+1]]*list_E_neural[inds,i][:,None]
+    else:
+        for i in range(band_defs.shape[0] - 1):
+            rV = np.random.randn(mdct_bands_unnormalized.shape[0],band_defs[i+1] - band_defs[i])
+            rV = rV/np.linalg.norm(rV,axis = 0)
+            mdct_bands_unnormalized[inds,band_defs[i]:band_defs[i+1]] = rV[inds,:]*list_E_neural[inds,i][:,None]
+
+    return mdct_bands_unnormalized
