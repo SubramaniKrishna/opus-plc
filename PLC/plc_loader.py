@@ -39,6 +39,31 @@ class PLCLoader(Sequence):
     def __len__(self):
         return self.nb_batches
 
+class PLCLoader_shape(Sequence):
+    # Expects concatenated energy and unit vectors as features
+    def __init__(self, features_mdct,features_E, batch_size):
+        self.batch_size = batch_size
+        self.nb_batches = features_mdct.shape[0]//self.batch_size
+        self.features_mdct = features_mdct[:self.nb_batches*self.batch_size, :, :]
+        self.features_E = features_E[:self.nb_batches*self.batch_size, :, :]
+        self.on_epoch_end()
+
+    def on_epoch_end(self):
+        self.indices = np.arange(self.nb_batches*self.batch_size)
+        np.random.shuffle(self.indices)
+
+    def __getitem__(self, index):
+        features_mdct = self.features_mdct[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
+        features_E = self.features_E[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
+        # features = np.concatenate((features_mdct,features_E),axis = -1)
+        inputs = features_mdct[:,:2,:].squeeze()
+        inputs = inputs.reshape(self.batch_size,2*800)
+        outputs = features_mdct[:,2:,:].squeeze()
+        return (inputs, outputs)
+
+    def __len__(self):
+        return self.nb_batches
+
 # class PLCLoader(Sequence):
 #     def __init__(self, features, lost, nb_burg_features, batch_size):
 #         self.batch_size = batch_size

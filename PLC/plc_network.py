@@ -1,7 +1,7 @@
 import math
 import tensorflow as tf
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, GRU, Dense, Embedding, Reshape, Concatenate, Lambda, Conv1D, Multiply, Add, Bidirectional, MaxPooling1D, Activation, GaussianNoise
+from tensorflow.keras.layers import Input, GRU, Dense, Embedding, Reshape, Concatenate, Lambda, Conv1D, Multiply, Add, Bidirectional, MaxPooling1D, Activation, GaussianNoise, Layer
 from tensorflow.compat.v1.keras.layers import CuDNNGRU
 from tensorflow.keras import backend as K
 from tensorflow.keras.constraints import Constraint
@@ -75,3 +75,39 @@ def new_lpcnet_plc_model(rnn_units=256, nb_used_features=21, cond_size = 20,nb_b
 
     return model
 
+
+def plc_shape(nb_cepstral_features = 800, nb_used_features=0, cond_size = 4000,nb_burg_features=0, batch_size=128):
+    
+    feat = Input(shape=(2*(nb_cepstral_features + nb_used_features + nb_burg_features)), batch_size=batch_size)
+    # feat = Reshape((-1,2*821))(feat)
+    # Decorrelate features using DCT
+    feat = tf.signal.dct(feat,type = 4)
+
+    fdense1 = Dense(cond_size, activation='tanh', name='plc_shape_dense1')
+    fdense2 = Dense(cond_size, activation='tanh', name='plc_shape_dense2')
+    fdense3 = Dense(cond_size, activation='tanh', name='plc_shape_dense3')
+    fdenseF = Dense(nb_cepstral_features, activation='linear', name='plc_out')
+
+    plc_out = fdense3(fdense2(fdense1(feat)))
+    plc_out = fdenseF(plc_out)
+    band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8
+    plc_out = renormalizer(band_defs)(plc_out)
+    model = Model(feat, plc_out)
+    return model
+
+# Renormalizing Layer
+class renormalizer(Layer):
+    def __init__(self, band_defs):
+        super(renormalizer, self).__init__()
+        self.band_defs = band_defs
+ 
+    def call(self, inputs):  
+        l = []
+        for i in range(self.band_defs.shape[0] - 1):
+            l.append(tf.linalg.normalize(inputs[:,self.band_defs[i]:self.band_defs[i+1]],axis = -1)[0])
+        M = tf.concat(l,-1)
+        return M
+    
+    def get_config(self):
+        config = super(renormalizer, self).get_config()
+        return config

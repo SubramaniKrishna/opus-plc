@@ -1,9 +1,10 @@
 import argparse
-from plc_loader import PLCLoader
+from plc_loader import *
 
 parser = argparse.ArgumentParser(description='Train a PLC model')
 
-parser.add_argument('features', metavar='<features file>', help='binary features file (float32)')
+parser.add_argument('features_logE', metavar='<features file>', help='binary features file containing log-Energies(float32)')
+parser.add_argument('features_mdct', metavar='<features file>', help='binary features file containing normalized mdcts (float32)')
 parser.add_argument('lost_file', metavar='<packet loss file>', help='packet loss traces (int8)')
 parser.add_argument('output', metavar='<output>', help='trained model file (.h5)')
 parser.add_argument('--model', metavar='<model>', default='plc_network', help='PLC model python definition (without .py)')
@@ -73,9 +74,10 @@ def plc_mdct_loss():
         mask = y_true[:,:,-1:]
         y_true = y_true[:,:,:-1]
         e = (y_pred - y_true)*mask
-        l1_loss = K.mean(K.abs(e))
+        # l1_loss = K.mean(K.abs(e))
+        rms_loss = K.sqrt(K.mean(K.square(e)))
 
-        return l1_loss
+        return rms_loss
     return loss
 
 def plc_loss(alpha=1.0, bias=0.):
@@ -130,16 +132,24 @@ opt = Adam(lr, decay=decay, beta_2=0.99)
 # strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
 
 # with strategy.scope():
-model = lpcnet.new_lpcnet_plc_model(rnn_units=args.gru_size, batch_size=batch_size, training=True, quantize=quantize, cond_size=args.cond_size)
-model.compile(optimizer=opt, loss=plc_mdct_loss(), metrics=[plc_mdct_loss()])
+# Energy Training
+# model = lpcnet.new_lpcnet_plc_model(rnn_units=args.gru_size, batch_size=batch_size, training=True, quantize=quantize, cond_size=args.cond_size)
+# model.compile(optimizer=opt, loss=plc_mdct_loss(), metrics=[plc_mdct_loss()])
+# model.summary()
+
+# Shape Training
+model = lpcnet.plc_shape(batch_size=batch_size, cond_size=args.cond_size)
+model.compile(optimizer=opt, loss=tf.keras.losses.MeanSquaredError())
 model.summary()
 
 
-feature_file = args.features
-nb_features = model.nb_used_features + model.nb_burg_features
-nb_used_features = model.nb_used_features
-nb_burg_features = model.nb_burg_features
-sequence_size = args.seq_length
+feature_file_logE = args.features_logE
+feature_file_mdct = args.features_mdct
+nb_features = 21
+# nb_features = model.nb_used_features + model.nb_burg_features
+# nb_used_features = model.nb_used_features
+# nb_burg_features = model.nb_burg_features
+# sequence_size = args.seq_length
 
 # u for unquantised, load 16 bit PCM samples and convert to mu-law
 # features = np.load("./feature_dump.npy")
@@ -149,15 +159,39 @@ sequence_size = args.seq_length
 # lost = np.random.randint(2, size=(nb_sequences,sequence_size,1))
 # print(features.shape,lost.shape)
 
-features = np.memmap(feature_file, dtype='float32', mode='r')
-nb_sequences = len(features)//(nb_features*sequence_size)//batch_size*batch_size
-features = features[:nb_sequences*sequence_size*nb_features]
+# features = np.memmap(feature_file, dtype='float32', mode='r')
+# nb_sequences = len(features)//(nb_features*sequence_size)//batch_size*batch_size
+# features = features[:nb_sequences*sequence_size*nb_features]
 
-features = np.reshape(features, (nb_sequences, sequence_size, nb_features))
+# features = np.reshape(features, (nb_sequences, sequence_size, nb_features))
 
-features = features[:, :, :nb_used_features+model.nb_burg_features]
+# features = features[:, :, :nb_used_features+model.nb_burg_features]
 
-lost = np.memmap(args.lost_file, dtype='int8', mode='r')
+# lost = np.memmap(args.lost_file, dtype='int8', mode='r')
+
+features_E = np.memmap(feature_file_logE, dtype='float32', mode='r')
+features_mdct = np.memmap(feature_file_mdct, dtype='float32', mode='r')
+
+sequence_size_shape = 3
+nb_features_cepstral = 960
+nb_sequences_shape = len(features_mdct)//(nb_features_cepstral*sequence_size_shape)//batch_size*batch_size
+features_mdct = features_mdct[:nb_sequences_shape*sequence_size_shape*nb_features_cepstral]
+features_mdct = np.reshape(features_mdct, (nb_sequences_shape, sequence_size_shape, nb_features_cepstral))
+features_mdct = features_mdct[:(int)(0.01*nb_sequences_shape), :, :800]
+
+nb_sequences_E = len(features_E)//(nb_features*sequence_size_shape)//batch_size*batch_size
+features_E = features_E[:nb_sequences_E*sequence_size_shape*nb_features]
+features_E = np.reshape(features_E, (nb_sequences_E, sequence_size_shape, nb_features))
+features_E = features_E[:(int)(0.01*nb_sequences_E), :, :]
+print(nb_sequences_shape,nb_sequences_E)
+# features_inp_shape = np.concatenate((features_mdct,features_E),axis = -1)
+
+# features = features[:nb_sequences*sequence_size*nb_features]
+
+# features = np.reshape(features, (nb_sequences, sequence_size, nb_features))
+
+# features = features[:, :, :nb_used_features+model.nb_burg_features]
+
 
 # dump models to disk as we go
 checkpoint = ModelCheckpoint('{}_{}_{}.h5'.format(args.output, args.gru_size, '{epoch:02d}'))
@@ -170,10 +204,12 @@ if quantize or retrain:
     model.load_weights(input_model)
 
 model.save_weights('{}_{}_initial.h5'.format(args.output, args.gru_size))
+print(features_E.shape,features_mdct.shape)
+# loader = PLCLoader(features, lost, nb_burg_features, batch_size)
+loader = PLCLoader_shape(features_mdct,features_E,batch_size)
 
-loader = PLCLoader(features, lost, nb_burg_features, batch_size)
-
-callbacks = [checkpoint]
+csv_logger = CSVLogger('train_loss.csv', append=False, separator=',')
+callbacks = [checkpoint, csv_logger]
 if args.logdir is not None:
     logdir = '{}/{}_{}_logs'.format(args.logdir, args.output, args.gru_size)
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=logdir)
