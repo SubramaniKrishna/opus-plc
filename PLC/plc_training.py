@@ -1,3 +1,6 @@
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+
 import argparse
 from plc_loader import *
 
@@ -56,8 +59,8 @@ if quantize:
     decay = 0
     input_model = args.quantize
 else:
-    lr = 0.001
-    decay = 2.5e-5
+    lr = 1.0e-2
+    decay = 0
 
 if args.lr is not None:
     lr = args.lr
@@ -74,10 +77,26 @@ def plc_mdct_loss():
         mask = y_true[:,:,-1:]
         y_true = y_true[:,:,:-1]
         e = (y_pred - y_true)*mask
-        # l1_loss = K.mean(K.abs(e))
-        rms_loss = K.sqrt(K.mean(K.square(e)))
-
+        l1_loss = K.mean(K.abs(e))
+        # rms_loss = K.sqrt(K.mean(K.square(e)))
         return rms_loss
+    return loss
+
+band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8
+# band_defs = np.array([0,1])*8
+def plc_mdctshape_loss_bandwise(alpha,band_defs):
+    def loss(y_true,y_pred):
+        e = (y_pred - y_true)
+        abs_e = K.abs(y_pred) - K.abs(y_true)
+        rms_loss = 0
+        abs_rms = 0
+        for i in range(band_defs.shape[0] - 1):
+            rms_loss+= K.sqrt(K.sum(K.square(e[:,band_defs[i]:band_defs[i+1]]),axis = -1))
+            abs_rms+= K.sqrt(K.sum(K.square(abs_e[:,band_defs[i]:band_defs[i+1]]),axis = -1))
+        # rms_loss = K.tanh(K.mean(rms_loss)/2)
+        rms_loss = K.mean(rms_loss)
+        abs_rms = K.mean(abs_rms)
+        return ((1 - alpha)*rms_loss + alpha*abs_rms)
     return loss
 
 def plc_loss(alpha=1.0, bias=0.):
@@ -139,7 +158,7 @@ opt = Adam(lr, decay=decay, beta_2=0.99)
 
 # Shape Training
 model = lpcnet.plc_shape(batch_size=batch_size, cond_size=args.cond_size)
-model.compile(optimizer=opt, loss=tf.keras.losses.MeanSquaredError())
+model.compile(optimizer=opt, loss=plc_mdctshape_loss_bandwise(0.0,band_defs))
 model.summary()
 
 
@@ -177,12 +196,12 @@ nb_features_cepstral = 960
 nb_sequences_shape = len(features_mdct)//(nb_features_cepstral*sequence_size_shape)//batch_size*batch_size
 features_mdct = features_mdct[:nb_sequences_shape*sequence_size_shape*nb_features_cepstral]
 features_mdct = np.reshape(features_mdct, (nb_sequences_shape, sequence_size_shape, nb_features_cepstral))
-features_mdct = features_mdct[:(int)(0.01*nb_sequences_shape), :, :800]
+features_mdct = features_mdct[:(int)(1*nb_sequences_shape), :, :800]
 
 nb_sequences_E = len(features_E)//(nb_features*sequence_size_shape)//batch_size*batch_size
 features_E = features_E[:nb_sequences_E*sequence_size_shape*nb_features]
 features_E = np.reshape(features_E, (nb_sequences_E, sequence_size_shape, nb_features))
-features_E = features_E[:(int)(0.01*nb_sequences_E), :, :]
+features_E = features_E[:(int)(1*nb_sequences_E), :, :]
 print(nb_sequences_shape,nb_sequences_E)
 # features_inp_shape = np.concatenate((features_mdct,features_E),axis = -1)
 
@@ -194,7 +213,7 @@ print(nb_sequences_shape,nb_sequences_E)
 
 
 # dump models to disk as we go
-checkpoint = ModelCheckpoint('{}_{}_{}.h5'.format(args.output, args.gru_size, '{epoch:02d}'))
+checkpoint = ModelCheckpoint('{}_{}_{}_{}.h5'.format(args.output, args.gru_size, args.cond_size, '{epoch:02d}'), save_freq = 10)
 
 if args.retrain is not None:
     model.load_weights(args.retrain)
@@ -203,7 +222,7 @@ if quantize or retrain:
     #Adapting from an existing model
     model.load_weights(input_model)
 
-model.save_weights('{}_{}_initial.h5'.format(args.output, args.gru_size))
+model.save_weights('{}_{}_{}_initial.h5'.format(args.output, args.gru_size, args.cond_size))
 print(features_E.shape,features_mdct.shape)
 # loader = PLCLoader(features, lost, nb_burg_features, batch_size)
 loader = PLCLoader_shape(features_mdct,features_E,batch_size)
@@ -211,7 +230,7 @@ loader = PLCLoader_shape(features_mdct,features_E,batch_size)
 csv_logger = CSVLogger('train_loss.csv', append=False, separator=',')
 callbacks = [checkpoint, csv_logger]
 if args.logdir is not None:
-    logdir = '{}/{}_{}_logs'.format(args.logdir, args.output, args.gru_size)
+    logdir = '{}/{}_{}_{}_logs'.format(args.logdir, args.output, args.gru_size, args.cond_size)
     tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=logdir)
     callbacks.append(tensorboard_callback)
 

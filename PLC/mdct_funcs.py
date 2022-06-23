@@ -19,6 +19,7 @@ def mdct_frame(x):
     # 120 Sample Vorbis Window
     Nw = 120
     vw = np.sin((np.pi/2)*(np.sin((np.pi/(2*Nw))*(np.arange(Nw) + 0.5)))**2)
+    # vw = np.ones(Nw)
     w = np.concatenate((np.zeros(420),vw,np.ones(840),np.flip(vw),np.zeros(420)))
 
     x = w*x
@@ -50,9 +51,9 @@ def mdct_ola(x,N,H):
     Short-Time windowed MDCT for input audio
     """
     l = []
-    xzp = np.concatenate((np.zeros(N//2),x,np.zeros(N//2)),0)
-    for i in range(0,x.shape[0] + 1,H):
-        l.append(mdct_frame(xzp[i:i+N]))
+    # xzp = np.concatenate((x,np.zeros(N//2)),0)
+    for i in range(0,x.shape[0] - N,H):
+        l.append(mdct_frame(x[i:i+N]))
     
     return np.stack(l,0)
 
@@ -70,6 +71,7 @@ def imdct_ola(x,N,H,Nog):
 def mdct2bands(mdct,band_defs):
     """
     Split MDCT into perceptual bands and return energy and normalized MDCT
+    (zero out coefficients 800:960 in accordance with CELT)
     """
     mdct_norm = np.copy(mdct)
     list_E = []
@@ -78,6 +80,7 @@ def mdct2bands(mdct,band_defs):
         list_E.append(np.linalg.norm(mdct[:,band_defs[i]:band_defs[i+1]],axis = 1))
         mdct_norm[:,band_defs[i]:band_defs[i+1]] = mdct_norm[:,band_defs[i]:band_defs[i+1]]/list_E[-1][:,None]
     
+    mdct_norm[:,800:] = 0
     list_E = np.stack(list_E,axis = 1)
     
     return list_E,mdct_norm
@@ -85,11 +88,13 @@ def mdct2bands(mdct,band_defs):
 def mdctbands2mdct(mdct_bands,list_E,band_defs):
     """
     Given energies and normalized MDCT return the original un-normalized MDCT coefficients
+    (zero out coefficients 800:960 in accordance with CELT)
     """
     mdct_bands_unnormalized = np.copy(mdct_bands)
 
     for i in range(band_defs.shape[0] - 1):
         mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]] = mdct_bands_unnormalized[:,band_defs[i]:band_defs[i+1]]*list_E[:,i][:,None]
+    mdct_bands_unnormalized[:,800:] = 0
     return mdct_bands_unnormalized
 
 def mdctbands2mdct_withplc(mdct_bands,list_E,band_defs,loss_trace,choice = 0):
