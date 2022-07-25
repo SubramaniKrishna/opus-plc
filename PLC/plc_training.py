@@ -59,7 +59,7 @@ if quantize:
     decay = 0
     input_model = args.quantize
 else:
-    lr = 1.0e-2
+    lr = 1.0e-3
     decay = 0
 
 if args.lr is not None:
@@ -74,11 +74,13 @@ if retrain:
 
 def plc_mdct_loss():
     def loss(y_true,y_pred):
-        mask = y_true[:,:,-1:]
-        y_true = y_true[:,:,:-1]
-        e = (y_pred - y_true)*mask
-        l1_loss = K.mean(K.abs(e))
-        # rms_loss = K.sqrt(K.mean(K.square(e)))
+        # mask = y_true[:,:,-1:]
+        # y_true = y_true[:,:,:-1]
+        # e = (y_pred - y_true)*mask
+        # l1_loss = K.mean(K.abs(e))
+
+        e = (y_pred - y_true)
+        rms_loss = K.sqrt(K.sum(K.square(e),axis = -1))
         return rms_loss
     return loss
 
@@ -90,14 +92,34 @@ def plc_mdctshape_loss_bandwise(alpha,band_defs):
         abs_e = K.abs(y_pred) - K.abs(y_true)
         rms_loss = 0
         abs_rms = 0
+        # print(y_pred.shape)
+        # bw = np.flip(np.arange(1,band_defs.shape[0]))
+        # bw = bw/bw.sum()
         for i in range(band_defs.shape[0] - 1):
-            rms_loss+= K.sqrt(K.sum(K.square(e[:,band_defs[i]:band_defs[i+1]]),axis = -1))
-            abs_rms+= K.sqrt(K.sum(K.square(abs_e[:,band_defs[i]:band_defs[i+1]]),axis = -1))
+            rms_loss+= K.sqrt(K.sum(K.square(e[:,band_defs[i] - band_defs[0]:band_defs[i+1] - band_defs[0],:]),axis = 1))
+            abs_rms+= K.sqrt(K.sum(K.square(abs_e[:,band_defs[i] - band_defs[0]:band_defs[i+1] - band_defs[0],:]),axis = 1))
         # rms_loss = K.tanh(K.mean(rms_loss)/2)
         rms_loss = K.mean(rms_loss)
         abs_rms = K.mean(abs_rms)
         return ((1 - alpha)*rms_loss + alpha*abs_rms)
     return loss
+
+def plcmdct_metric(y_true,y_pred):
+        alpha = 0
+        e = (y_pred - y_true)
+        abs_e = K.abs(y_pred) - K.abs(y_true)
+        rms_loss = 0
+        abs_rms = 0
+        # print(y_pred.shape)
+        # bw = np.flip(np.arange(1,band_defs.shape[0]))
+        # bw = bw/bw.sum()
+        for i in range(band_defs.shape[0] - 1):
+            rms_loss+= K.sqrt(K.sum(K.square(e[:,band_defs[i] - band_defs[0]:band_defs[i+1] - band_defs[0],:]),axis = 1))
+            abs_rms+= K.sqrt(K.sum(K.square(abs_e[:,band_defs[i] - band_defs[0]:band_defs[i+1] - band_defs[0],:]),axis = 1))
+        # rms_loss = K.tanh(K.mean(rms_loss)/2)
+        rms_loss = K.mean(rms_loss)
+        abs_rms = K.mean(abs_rms)
+        return ((1 - alpha)*rms_loss + alpha*abs_rms)
 
 def plc_loss(alpha=1.0, bias=0.):
     def loss(y_true,y_pred):
@@ -157,8 +179,11 @@ opt = Adam(lr, decay=decay, beta_2=0.99)
 # model.summary()
 
 # Shape Training
-model = lpcnet.plc_shape(batch_size=batch_size, cond_size=args.cond_size)
-model.compile(optimizer=opt, loss=plc_mdctshape_loss_bandwise(0.0,band_defs))
+# model = lpcnet.plc_shape(nb_cepstral_features = int(band_defs[-1] - band_defs[0]),batch_size=batch_size, cond_size=args.cond_size, band_defs = band_defs)
+# model = lpcnet.plc_shape_cnn(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs)
+model = lpcnet.plc_shape_cnnfull(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs)
+model.compile(optimizer=opt, loss=plc_mdctshape_loss_bandwise(0.0,band_defs), metrics = [plcmdct_metric])
+# model.compile(optimizer=opt, loss=plc_mdct_loss())
 model.summary()
 
 
@@ -191,18 +216,18 @@ nb_features = 21
 features_E = np.memmap(feature_file_logE, dtype='float32', mode='r')
 features_mdct = np.memmap(feature_file_mdct, dtype='float32', mode='r')
 
-sequence_size_shape = 3
+sequence_size_shape = 100
 nb_features_cepstral = 960
 nb_sequences_shape = len(features_mdct)//(nb_features_cepstral*sequence_size_shape)//batch_size*batch_size
 features_mdct = features_mdct[:nb_sequences_shape*sequence_size_shape*nb_features_cepstral]
 features_mdct = np.reshape(features_mdct, (nb_sequences_shape, sequence_size_shape, nb_features_cepstral))
-features_mdct = features_mdct[:(int)(1*nb_sequences_shape), :, :800]
+features_mdct = features_mdct[:(int)(0.2*nb_sequences_shape), :, band_defs[0]:band_defs[-1]]
 
 nb_sequences_E = len(features_E)//(nb_features*sequence_size_shape)//batch_size*batch_size
 features_E = features_E[:nb_sequences_E*sequence_size_shape*nb_features]
 features_E = np.reshape(features_E, (nb_sequences_E, sequence_size_shape, nb_features))
-features_E = features_E[:(int)(1*nb_sequences_E), :, :]
-print(nb_sequences_shape,nb_sequences_E)
+features_E = features_E[:(int)(0.2*nb_sequences_E), :, :]
+# print(nb_sequences_shape,nb_sequences_E)
 # features_inp_shape = np.concatenate((features_mdct,features_E),axis = -1)
 
 # features = features[:nb_sequences*sequence_size*nb_features]
@@ -213,19 +238,19 @@ print(nb_sequences_shape,nb_sequences_E)
 
 
 # dump models to disk as we go
-checkpoint = ModelCheckpoint('{}_{}_{}_{}.h5'.format(args.output, args.gru_size, args.cond_size, '{epoch:02d}'), save_freq = 10)
+checkpoint = ModelCheckpoint('{}_{}_{}_{}.h5'.format(args.output, args.gru_size, args.cond_size, '{epoch:02d}'), save_freq = "epoch")
 
-if args.retrain is not None:
-    model.load_weights(args.retrain)
+# if args.retrain is not None:
+#     model.load_weights(args.retrain)
 
-if quantize or retrain:
-    #Adapting from an existing model
-    model.load_weights(input_model)
+# if quantize or retrain:
+#     #Adapting from an existing model
+#     model.load_weights(input_model)
 
 model.save_weights('{}_{}_{}_initial.h5'.format(args.output, args.gru_size, args.cond_size))
-print(features_E.shape,features_mdct.shape)
+# print(features_E.shape,features_mdct.shape)
 # loader = PLCLoader(features, lost, nb_burg_features, batch_size)
-loader = PLCLoader_shape(features_mdct,features_E,batch_size)
+loader = PLCLoader_shape(features_mdct,features_E,sequence_size_shape,batch_size)
 
 csv_logger = CSVLogger('train_loss.csv', append=False, separator=',')
 callbacks = [checkpoint, csv_logger]

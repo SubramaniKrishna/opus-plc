@@ -41,12 +41,14 @@ class PLCLoader(Sequence):
 
 class PLCLoader_shape(Sequence):
     # Expects concatenated energy and unit vectors as features
-    def __init__(self, features_mdct,features_E, batch_size):
+    def __init__(self, features_mdct,features_E, seq_size,batch_size,choice = 0):
         self.batch_size = batch_size
+        self.seq_size = seq_size
         self.nb_batches = features_mdct.shape[0]//self.batch_size
         self.features_mdct = features_mdct[:self.nb_batches*self.batch_size, :, :]
         self.features_E = features_E[:self.nb_batches*self.batch_size, :, :]
         self.on_epoch_end()
+        self.choice = choice
 
     def on_epoch_end(self):
         self.indices = np.arange(self.nb_batches*self.batch_size)
@@ -56,10 +58,29 @@ class PLCLoader_shape(Sequence):
         features_mdct = self.features_mdct[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
         features_E = self.features_E[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
         # features = np.concatenate((features_mdct,features_E),axis = -1)
-        inputs = features_mdct[:,:2,:].squeeze()
-        inputs = inputs.reshape(self.batch_size,2*800)
-        outputs = features_mdct[:,2:,:].squeeze()
-        return (inputs, outputs)
+        # inputs = features_mdct[:,:2,:].squeeze()
+        # inputs = inputs.reshape(self.batch_size,2*inputs.shape[-1]) #Feedforward
+        # inputs = inputs.reshape(self.batch_size,1,2,inputs.shape[-1]) #CNN
+        # outputs = features_mdct[:,2:,:].squeeze()
+        # print(inputs.shape,outputs.shape)
+        # inputs = features_mdct.reshape(self.batch_size,features_mdct.shape[-1],self.seq_size,1) #CNN
+        inputs = np.expand_dims(np.transpose(features_mdct,[0,2,1]),-1)
+        outputs = np.roll(inputs.squeeze(),-2,-1)
+        # Augment 0,1 for odd/even mdcts as "positional encodings"
+        zarr = (np.arange(inputs.shape[1])%2).astype('float')
+        zarr[zarr == 0] = -1
+        zarr = np.stack([zarr for i in range(self.seq_size)])
+        zarr = zarr.transpose([1,0])
+        zarr = np.stack([zarr for i in range(self.batch_size)],0)
+        zarr = np.expand_dims(zarr,-1)
+        inputs = np.concatenate([inputs,zarr],-1)
+        # inputs = inputs*zarr
+        # outputs = inputs.squeeze()
+        # print(inputs.shape,outputs.shape)
+        if self.choice == 0:
+            return (inputs, outputs)
+        else:
+            return (inputs,features_E,outputs)
 
     def __len__(self):
         return self.nb_batches

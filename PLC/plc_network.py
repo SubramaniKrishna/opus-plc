@@ -1,7 +1,7 @@
 import math
 import tensorflow as tf
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, GRU, Dense, Embedding, Reshape, Concatenate, Lambda, Conv1D, Multiply, Add, Bidirectional, MaxPooling1D, Activation, GaussianNoise, Layer
+from tensorflow.keras.layers import Input, GRU, Dense, Embedding, Reshape, Concatenate, Lambda, Conv1D, Multiply, Add, Bidirectional, MaxPooling1D, Activation, GaussianNoise, Layer, Conv2D, AveragePooling2D, Concatenate
 from tensorflow.compat.v1.keras.layers import CuDNNGRU
 from tensorflow.keras import backend as K
 from tensorflow.keras.constraints import Constraint
@@ -76,16 +76,16 @@ def new_lpcnet_plc_model(rnn_units=256, nb_used_features=21, cond_size = 20,nb_b
     return model
 
 
-def plc_shape(nb_cepstral_features = 800, nb_used_features=0, cond_size = 4000,nb_burg_features=0, batch_size=128):
+def plc_shape(nb_cepstral_features = 56, nb_used_features=0, cond_size = 4000,nb_burg_features=0, batch_size=128, band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8):
     
-    band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8
-    # band_defs = np.array([0,1])*8
+    # band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8
+    # band_defs = np.array([0,1,2,3,4,5,6,7])*8
     feat = Input(shape=(2*(nb_cepstral_features + nb_used_features + nb_burg_features)), batch_size=batch_size)
     plc_out = bandwise_FF(band_defs, cond_size, batch_size)(feat)
-    # feat = Reshape((-1,2*821))(feat)
+    # feat = tf.squeeze(Reshape((-1,2*(nb_cepstral_features + nb_used_features + nb_burg_features)))(feat))
     # Decorrelate features using DCT
     # feat = tf.signal.dct(feat,type = 4)
-
+    # print(feat.shape)
     # fdense1 = Dense(cond_size, activation='tanh', name='plc_shape_dense1')
     # fdense2 = Dense(cond_size, activation='tanh', name='plc_shape_dense2')
     # fdense3 = Dense(cond_size, activation='tanh', name='plc_shape_dense3')
@@ -93,25 +93,33 @@ def plc_shape(nb_cepstral_features = 800, nb_used_features=0, cond_size = 4000,n
 
     # plc_out = fdense3(fdense2(fdense1(feat)))
     # plc_out = fdenseF(plc_out)
-
+    # print(plc_out.shape)
     # interm = fdense2(fdense1(feat))
     # plc_out = bandwise_FF(band_defs)(interm)
 
     plc_out = renormalizer(band_defs)(plc_out)
+    # plc_out = tf.linalg.normalize(plc_out,axis = -1)[0] #Single band normalization
     model = Model(feat, plc_out)
     return model
 
 # Renormalizing Layer
 class renormalizer(Layer):
-    def __init__(self, band_defs):
+    def __init__(self, band_defs,choice = 'out'):
         super(renormalizer, self).__init__()
         self.band_defs = band_defs
+        self.choice = choice
  
     def call(self, inputs):  
         l = []
-        for i in range(self.band_defs.shape[0] - 1):
-            l.append(tf.linalg.normalize(inputs[:,self.band_defs[i]:self.band_defs[i+1]],axis = -1)[0])
-        M = tf.concat(l,-1)
+        if self.choice == 'out':
+            for i in range(self.band_defs.shape[0] - 1):
+                l.append(tf.linalg.normalize(inputs[:,self.band_defs[i] - self.band_defs[0]:self.band_defs[i+1] - self.band_defs[0],:,:],axis = 1)[0])
+            M = tf.concat(l,1)
+        else:
+            for i in range(self.band_defs.shape[0] - 1):
+                N = np.sqrt(self.band_defs[i+1] - self.band_defs[i])
+                l.append(N*tf.linalg.normalize(inputs[:,self.band_defs[i] - self.band_defs[0]:self.band_defs[i+1] - self.band_defs[0],:,:],axis = 1)[0])
+            M = tf.concat(l,1)
         return M
     
     def get_config(self):
@@ -135,11 +143,118 @@ class bandwise_FF(Layer):
     def call(self, inputs):  
         l = []
         for i in range(self.band_defs.shape[0] - 1):
-            inp = tf.concat([inputs[:,self.band_defs[i]:self.band_defs[i + 1]],inputs[:,800 + self.band_defs[i]:800 + self.band_defs[i + 1]]],-1)
+            inp = tf.concat([inputs[:,self.band_defs[i]- self.band_defs[0]:self.band_defs[i + 1]- self.band_defs[0]],inputs[:,self.band_defs[-1] + self.band_defs[i]- self.band_defs[0]:self.band_defs[-1] + self.band_defs[i + 1]- self.band_defs[0]]],-1)
+            # print(inp.shape)
             l.append(self.nets[i](inp))
+            # l.append(self.nets[i](tf.signal.dct(inputs,4)))
         M = tf.concat(l,-1)
         return M
     
     def get_config(self):
         config = super(bandwise_FF, self).get_config()
+        return config
+
+def plc_shape_cnn(nb_cepstral_features = 800, nb_used_features=0, cond_size = 4000,nb_burg_features=0, batch_size=128, band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8):
+    
+    # band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8
+    # band_defs = np.array([0,1])*8
+    feat = Input(shape=(2*(nb_cepstral_features + nb_used_features + nb_burg_features)), batch_size=batch_size)
+    feat = Reshape((1,2,nb_cepstral_features))(feat)
+    feat = renormalizer(band_defs,'in')(feat)
+    # print(feat.shape)
+    fconv1 = Conv2D(2000, (3,2), (1,1), padding = 'same', activation='tanh')
+    fconv2 = Conv2D(2000, (3,2), (1,1), padding = 'same', activation='tanh')
+    fconv3 = Conv2D(1000, (3,2), (1,1), padding = 'same', activation='tanh')
+    ap = AveragePooling2D(pool_size=(2, 2),strides=(2, 2),padding = 'same')
+    op1 = fconv1(feat)
+    op1 = ap(op1)
+    # op1 = Concatenate(axis = 2)([op1,feat])
+    op1 = fconv2(op1)
+    op1 = ap(op1)
+    op1 = fconv3(op1)
+    cnn_out = tf.squeeze(ap(op1))
+    # cnn_out = fconv3(Concatenate(axis = 2)([op1,op2]))
+    # cnn_out = tf.squeeze(ap(cnn_out))
+    # print(op2.shape,cnn_out.shape)
+    # cnn_out = tf.squeeze(fconv3(fconv2(ap(fconv1(feat)))))
+    if batch_size == 1:
+        cnn_out = tf.expand_dims(cnn_out,0)
+    # print(fconv1(feat).shape)
+    # print(tf.squeeze(ap(fconv1(feat))).shape)
+    fdense1 = Dense(1000, activation='tanh', name='plc_shape_dense1')
+    fdense2 = Dense(nb_cepstral_features, activation='linear', name='plc_shape_dense2')
+    plc_out = fdense2(fdense1(cnn_out))
+    # plc_out = bandwise_FF(band_defs, 100, batch_size)(cnn_out)
+    # print(fdense2(fdense1(ap(fconv1(feat)).shape)))
+    # plc_out = bandwise_FF(band_defs, cond_size, batch_size)(feat)
+    # feat = Reshape((-1,2*821))(feat)
+    # Decorrelate features using DCT
+    # feat = tf.signal.dct(feat,type = 4)
+
+    # fdense1 = Dense(cond_size, activation='tanh', name='plc_shape_dense1')
+    # fdense2 = Dense(cond_size, activation='tanh', name='plc_shape_dense2')
+    # fdense3 = Dense(cond_size, activation='tanh', name='plc_shape_dense3')
+    # fdenseF = Dense(nb_cepstral_features, activation='linear', name='plc_out')
+
+    # plc_out = fdense3(fdense2(fdense1(feat)))
+    # plc_out = fdenseF(plc_out)
+
+    # interm = fdense2(fdense1(feat))
+    # plc_out = bandwise_FF(band_defs)(interm)
+
+    plc_out = renormalizer(band_defs)(plc_out)
+    model = Model(feat, plc_out)
+    return model
+
+def plc_shape_cnnfull(nb_cepstral_features = 800, nb_used_features=0, cond_size = 4000,nb_burg_features=0, batch_size=128, band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8):
+    
+    # if mode == "train":
+    input_shape = (band_defs[-1] - band_defs[0],100,1) # more than 10, 64 or 128
+    feat = Input(shape=input_shape, batch_size=batch_size)
+    # temp = feat
+    # temp = renormalizer(band_defs,'in')(feat)
+    plc_out = bandwise_CNN(band_defs,1,batch_size)(feat)
+    
+    # fconv1 = Conv2D(128, (8,2), 1, padding = 'same', activation='tanh', data_format = 'channels_last')
+    # fconv2 = Conv2D(64, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last')
+    # fconv3 = Conv2D(32, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last')
+    # fconvF = Conv2D(1, (8,1), 1, padding = 'same', activation='linear',use_bias = False, data_format = 'channels_last')
+    # temp = fconv3(fconv2(fconv1(temp)))
+    # plc_out = fconvF(temp)
+
+
+    plc_out = tf.squeeze(renormalizer(band_defs,'out')(plc_out))
+    # plc_out = tf.squeeze(tf.roll(feat,-2,-2))
+    model = Model(feat, plc_out)
+    return model
+
+
+# CNN to autoencode each band
+class bandwise_CNN(Layer):
+    def __init__(self, band_defs, cond_size, batch_size):
+        super(bandwise_CNN, self).__init__()
+        self.band_defs = band_defs
+        self.nets = []
+        for i in range(band_defs.shape[0] - 1):
+            L = tf.keras.Sequential()
+            input_shape = (band_defs[i+1] - band_defs[i],100,1)
+            L.add(Input(shape=input_shape, batch_size=batch_size))
+
+            L.add(Conv2D(64, (8,2), 1, padding = 'same', activation='tanh', data_format = 'channels_last'))
+            L.add(Conv2D(64, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last'))
+            L.add(Conv2D(32, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last'))
+            L.add(Conv2D(1, (8,1), 1, padding = 'same', activation='linear',use_bias = False, data_format = 'channels_last'))
+
+            self.nets.append(L)
+ 
+    def call(self, inputs):  
+        l = []
+        for i in range(self.band_defs.shape[0] - 1):
+            inp = inputs[:,self.band_defs[i]- self.band_defs[0]:self.band_defs[i + 1]- self.band_defs[0],:,:]
+            l.append(self.nets[i](inp))
+        M = tf.concat(l,1)
+        return M
+    
+    def get_config(self):
+        config = super(bandwise_CNN, self).get_config()
         return config
