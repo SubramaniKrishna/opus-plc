@@ -67,20 +67,22 @@ class PLCLoader_shape(Sequence):
         inputs = np.expand_dims(np.transpose(features_mdct,[0,2,1]),-1)
         outputs = np.roll(inputs.squeeze(),-2,-1)
         # Augment 0,1 for odd/even mdcts as "positional encodings"
-        zarr = (np.arange(inputs.shape[1])%2).astype('float')
-        zarr[zarr == 0] = -1
-        zarr = np.stack([zarr for i in range(self.seq_size)])
-        zarr = zarr.transpose([1,0])
-        zarr = np.stack([zarr for i in range(self.batch_size)],0)
-        zarr = np.expand_dims(zarr,-1)
-        inputs = np.concatenate([inputs,zarr],-1)
+        # zarr = (np.arange(inputs.shape[1])%2).astype('float')
+        # zarr[zarr == 0] = -1
+        # zarr = np.stack([zarr for i in range(self.seq_size)])
+        # zarr = zarr.transpose([1,0])
+        # zarr = np.stack([zarr for i in range(self.batch_size)],0)
+        # zarr = np.expand_dims(zarr,-1)
+        # inputs = np.concatenate([inputs,zarr],-1)
         # inputs = inputs*zarr
         # outputs = inputs.squeeze()
         # print(inputs.shape,outputs.shape)
         if self.choice == 0:
             return (inputs, outputs)
         else:
-            return (inputs,features_E,outputs)
+            # outputs = np.concatenate([features_E,np.transpose(outputs,[0,2,1])],-1)
+            # print(inputs.shape,outputs.shape)
+            return (inputs, features_E, outputs)
 
     def __len__(self):
         return self.nb_batches

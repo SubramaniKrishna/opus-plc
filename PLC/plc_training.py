@@ -1,8 +1,16 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
 
 import argparse
 from plc_loader import *
+from tf_imdct_helpers import *
+ebandMeans = np.array([
+      6.437500, 6.250000, 5.750000, 5.312500, 5.062500,
+      4.812500, 4.500000, 4.375000, 4.875000, 4.687500,
+      4.562500, 4.437500, 4.875000, 4.625000, 4.312500,
+      4.500000, 4.375000, 4.625000, 4.750000, 4.437500,
+      3.750000, 3.750000, 3.750000, 3.750000, 3.750000
+]).astype('float')
 
 parser = argparse.ArgumentParser(description='Train a PLC model')
 
@@ -40,6 +48,7 @@ import h5py
 
 import tensorflow as tf
 gpus = tf.config.experimental.list_physical_devices('GPU')
+import tensorflow_io as tfio
 #if gpus:
 #  try:
 #    tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=5120)])
@@ -59,7 +68,7 @@ if quantize:
     decay = 0
     input_model = args.quantize
 else:
-    lr = 1.0e-3
+    lr = 1.0e-2
     decay = 0
 
 if args.lr is not None:
@@ -102,6 +111,20 @@ def plc_mdctshape_loss_bandwise(alpha,band_defs):
         rms_loss = K.mean(rms_loss)
         abs_rms = K.mean(abs_rms)
         return ((1 - alpha)*rms_loss + alpha*abs_rms)
+    return loss
+
+def plc_mdctshape_spectralloss():
+    def loss(y_true,y_pred):
+        gt_E = tf.roll(y_true[:,:,:21],-2,1)
+        gt_mdct = tf.concat((tf.transpose(tf.roll(y_true[:,:,21:],0,1),[0,2,1]),tf.zeros((16,160,100))),1)
+        gt_audio = tf_imdct_ola(gt_mdct,gt_E,960*2,480*2,960*100,band_defs,ebandMeans)
+        pred_audio = tf_imdct_ola(y_pred,gt_E,960*2,480*2,960*100,band_defs,ebandMeans)
+        spec_gt = tfio.audio.spectrogram(gt_audio,960*2,960*2,480*2)
+        spec_pred = tfio.audio.spectrogram(pred_audio,960*2,960*2,480*2)
+
+        e = (spec_gt - spec_pred)**2
+        # print("LOSS",K.mean(e).shape)
+        return K.mean(e)
     return loss
 
 def plcmdct_metric(y_true,y_pred):
@@ -181,8 +204,10 @@ opt = Adam(lr, decay=decay, beta_2=0.99)
 # Shape Training
 # model = lpcnet.plc_shape(nb_cepstral_features = int(band_defs[-1] - band_defs[0]),batch_size=batch_size, cond_size=args.cond_size, band_defs = band_defs)
 # model = lpcnet.plc_shape_cnn(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs)
-model = lpcnet.plc_shape_cnnfull(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs)
-model.compile(optimizer=opt, loss=plc_mdctshape_loss_bandwise(0.0,band_defs), metrics = [plcmdct_metric])
+# model = lpcnet.plc_shape_dense(nb_cepstral_features = int(band_defs[-1] - band_defs[0]),batch_size=batch_size, cond_size=args.cond_size, band_defs = band_defs) # Dense
+model = lpcnet.plc_shape_cnnfull(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs) # CNN
+model.compile(optimizer=opt, loss=plc_mdctshape_loss_bandwise(0.0,band_defs), metrics = [plcmdct_metric]) #Bandwise CNN Loss
+# model.compile(optimizer=opt, loss=plc_mdctshape_spectralloss(), metrics = [plcmdct_metric]) #Spectral Loss
 # model.compile(optimizer=opt, loss=plc_mdct_loss())
 model.summary()
 
@@ -221,12 +246,12 @@ nb_features_cepstral = 960
 nb_sequences_shape = len(features_mdct)//(nb_features_cepstral*sequence_size_shape)//batch_size*batch_size
 features_mdct = features_mdct[:nb_sequences_shape*sequence_size_shape*nb_features_cepstral]
 features_mdct = np.reshape(features_mdct, (nb_sequences_shape, sequence_size_shape, nb_features_cepstral))
-features_mdct = features_mdct[:(int)(0.2*nb_sequences_shape), :, band_defs[0]:band_defs[-1]]
+features_mdct = features_mdct[:(int)(1*nb_sequences_shape), :, band_defs[0]:band_defs[-1]]
 
 nb_sequences_E = len(features_E)//(nb_features*sequence_size_shape)//batch_size*batch_size
 features_E = features_E[:nb_sequences_E*sequence_size_shape*nb_features]
 features_E = np.reshape(features_E, (nb_sequences_E, sequence_size_shape, nb_features))
-features_E = features_E[:(int)(0.2*nb_sequences_E), :, :]
+features_E = features_E[:(int)(1*nb_sequences_E), :, :]
 # print(nb_sequences_shape,nb_sequences_E)
 # features_inp_shape = np.concatenate((features_mdct,features_E),axis = -1)
 
@@ -250,7 +275,7 @@ checkpoint = ModelCheckpoint('{}_{}_{}_{}.h5'.format(args.output, args.gru_size,
 model.save_weights('{}_{}_{}_initial.h5'.format(args.output, args.gru_size, args.cond_size))
 # print(features_E.shape,features_mdct.shape)
 # loader = PLCLoader(features, lost, nb_burg_features, batch_size)
-loader = PLCLoader_shape(features_mdct,features_E,sequence_size_shape,batch_size)
+loader = PLCLoader_shape(features_mdct,features_E,sequence_size_shape,batch_size,0)
 
 csv_logger = CSVLogger('train_loss.csv', append=False, separator=',')
 callbacks = [checkpoint, csv_logger]
