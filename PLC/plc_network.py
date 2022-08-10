@@ -133,11 +133,12 @@ class renormalizer(Layer):
         if self.choice == 'out':
             for i in range(self.band_defs.shape[0] - 1):
                 l.append(tf.linalg.normalize(inputs[:,self.band_defs[i] - self.band_defs[0]:self.band_defs[i+1] - self.band_defs[0],:,:],axis = 1)[0])
+                # l.append(inputs[:,self.band_defs[i] - self.band_defs[0]:self.band_defs[i+1] - self.band_defs[0],:,:])
             M = tf.concat(l,1)
         else:
             for i in range(self.band_defs.shape[0] - 1):
                 N = np.sqrt(self.band_defs[i+1] - self.band_defs[i])
-                l.append(N*tf.linalg.normalize(inputs[:,self.band_defs[i] - self.band_defs[0]:self.band_defs[i+1] - self.band_defs[0],:,:],axis = 1)[0])
+                l.append(N*inputs[:,self.band_defs[i] - self.band_defs[0]:self.band_defs[i+1] - self.band_defs[0],:,:])
             M = tf.concat(l,1)
         return M
     
@@ -230,21 +231,53 @@ def plc_shape_cnnfull(nb_cepstral_features = 800, nb_used_features=0, cond_size 
     # if mode == "train":
     input_shape = (band_defs[-1] - band_defs[0],100,1) # more than 10, 64 or 128
     feat = Input(shape=input_shape, batch_size=batch_size)
-    # temp = feat
-    temp = renormalizer(band_defs,'in')(feat)
+    temp = feat
+    # temp = renormalizer(band_defs,'in')(feat)
     # plc_out = bandwise_CNN(band_defs,1,batch_size)(feat)
+
+    # lost = Input(shape=(1,100,1), batch_size=batch_size)
+    # temp = Concatenate(axis = 1)([temp, lost])
     
-    fconv1 = Conv2D(512, (8,2), 1, padding = 'same', activation='tanh', data_format = 'channels_last')
-    fconv2 = Conv2D(512, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last')
-    fconv3 = Conv2D(256, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last')
+    fconv1 = Conv2D(128, (8,2), 1, padding = 'same', activation='tanh', data_format = 'channels_last', bias_initializer=tf.keras.initializers.GlorotNormal())
+    fconv2 = Conv2D(128, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last', bias_initializer=tf.keras.initializers.GlorotNormal())
+    fconv3 = Conv2D(128, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last', bias_initializer=tf.keras.initializers.GlorotNormal())
     fconvF = Conv2D(1, (8,1), 1, padding = 'same', activation='linear',use_bias = False, data_format = 'channels_last')
     temp = fconv3(fconv2(fconv1(temp)))
     plc_out = fconvF(temp)
 
-    # plc_out = tf.squeeze(plc_out)
-    plc_out = tf.squeeze(renormalizer(band_defs,'out')(plc_out))
+    plc_out = tf.squeeze(plc_out)
+    # plc_out = tf.squeeze(renormalizer(band_defs,'out')(plc_out))
     # plc_out = tf.concat((plc_out,tf.zeros((batch_size,960 - band_defs[-1],100))),1)
     # plc_out = tf.squeeze(tf.roll(feat,-2,-2))
+    model = Model(feat, plc_out)
+    return model
+
+def plc_shape_cnnsmoothed(nb_cepstral_features = 800, nb_used_features=0, cond_size = 4000,nb_burg_features=0, batch_size=128, band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24, 28, 34, 40, 48, 60, 78, 100])*8):
+    
+    # if mode == "train":
+    input_shape = (band_defs[-1] - band_defs[0],100,1) # more than 10, 64 or 128
+    feat = Input(shape=input_shape, batch_size=batch_size)
+    temp = feat
+    # temp = renormalizer(band_defs,'in')(feat)
+    # plc_out = bandwise_CNN(band_defs,1,batch_size)(feat)
+
+    # lost = Input(shape=(1,100,1), batch_size=batch_size)
+    # temp = Concatenate(axis = 1)([temp, lost])
+    
+    fconv1 = Conv2D(128, (8,2), 1, padding = 'same', activation='tanh', data_format = 'channels_last', bias_initializer=tf.keras.initializers.GlorotNormal())
+    fconv2 = Conv2D(128, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last', bias_initializer=tf.keras.initializers.GlorotNormal())
+    fconv3 = Conv2D(128, (8,1), 1, padding = 'same', activation='tanh', data_format = 'channels_last', bias_initializer=tf.keras.initializers.GlorotNormal())
+    fconv_mu = Conv2D(1, (8,1), 1, padding = 'same', activation='linear',use_bias = False, data_format = 'channels_last')
+    fconv_sigma = Conv2D(1, (8,1), 1, padding = 'same', activation='linear', data_format = 'channels_last')
+    temp = fconv3(fconv2(fconv1(temp)))
+    plc_out_mu = fconv_mu(temp)
+    plc_out_sigma = fconv_sigma(temp)
+
+    plc_out = tf.concat((plc_out_mu,plc_out_sigma),-1)
+    # plc_out = tf.squeeze(renormalizer(band_defs,'out')(plc_out))
+    # plc_out = tf.concat((plc_out,tf.zeros((batch_size,960 - band_defs[-1],100))),1)
+    # plc_out = tf.roll(temp,-2,-2)
+    # plc_out = tf.concat((plc_out,tf.zeros_like(plc_out) + 1.0e-6),-1)
     model = Model(feat, plc_out)
     return model
 

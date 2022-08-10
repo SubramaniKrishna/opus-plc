@@ -41,22 +41,33 @@ class PLCLoader(Sequence):
 
 class PLCLoader_shape(Sequence):
     # Expects concatenated energy and unit vectors as features
-    def __init__(self, features_mdct,features_E, seq_size,batch_size,choice = 0):
+    def __init__(self, features_mdct_smooth, features_mdct_unitnorm, features_E, seq_size,batch_size,choice = 0,lost = 0):
         self.batch_size = batch_size
         self.seq_size = seq_size
-        self.nb_batches = features_mdct.shape[0]//self.batch_size
-        self.features_mdct = features_mdct[:self.nb_batches*self.batch_size, :, :]
+        self.nb_batches = features_mdct_smooth.shape[0]//self.batch_size
+        self.features_mdct = features_mdct_smooth[:self.nb_batches*self.batch_size, :, :]
+        self.features_mdct_target = features_mdct_unitnorm[:self.nb_batches*self.batch_size, :, :]
         self.features_E = features_E[:self.nb_batches*self.batch_size, :, :]
+        self.lost = lost.astype('float')
+        self.lost = np.ones_like(self.lost)
+        self.lost = self.lost[:(len(self.lost)//seq_size-1)*seq_size]
         self.on_epoch_end()
         self.choice = choice
 
     def on_epoch_end(self):
         self.indices = np.arange(self.nb_batches*self.batch_size)
         np.random.shuffle(self.indices)
+        offset = np.random.randint(0, high=self.seq_size)
+        self.lost_offset = np.reshape(self.lost[offset:-self.seq_size+offset], (-1, self.seq_size))
+        self.lost_indices = np.random.randint(0, high=self.lost_offset.shape[0], size=self.nb_batches*self.batch_size)
 
     def __getitem__(self, index):
         features_mdct = self.features_mdct[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
+        features_mdct_target = self.features_mdct_target[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
         features_E = self.features_E[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
+        lost = self.lost_offset[self.lost_indices[index*self.batch_size:(index+1)*self.batch_size], :]
+        lost = np.reshape(lost, (features_mdct.shape[0], features_mdct.shape[1], 1))
+        lost_mask = np.tile(lost, (1,1,features_mdct.shape[2]))
         # features = np.concatenate((features_mdct,features_E),axis = -1)
         # inputs = features_mdct[:,:2,:].squeeze()
         # inputs = inputs.reshape(self.batch_size,2*inputs.shape[-1]) #Feedforward
@@ -64,8 +75,16 @@ class PLCLoader_shape(Sequence):
         # outputs = features_mdct[:,2:,:].squeeze()
         # print(inputs.shape,outputs.shape)
         # inputs = features_mdct.reshape(self.batch_size,features_mdct.shape[-1],self.seq_size,1) #CNN
-        inputs = np.expand_dims(np.transpose(features_mdct,[0,2,1]),-1)
-        outputs = np.roll(inputs.squeeze(),-2,-1)
+        inputs = np.expand_dims(np.transpose(features_mdct*lost_mask,[0,2,1]),-1)
+        outputs = np.roll(np.transpose(features_mdct,[0,2,1]),-2,-1)
+
+        # inputs = [inputs,np.expand_dims(lost.transpose([0,2,1]),-1)]
+        out_lost = np.copy(lost)
+        out_lost[:,1:,:] = out_lost[:,1:,:]*out_lost[:,:-1,:]
+        out_lost = out_lost.transpose([0,2,1])
+        # print(out_lost[out_lost == 1])
+        outputs = np.concatenate([outputs, 1.-out_lost], axis=1)
+        # print(np.linalg.norm(inputs))
         # Augment 0,1 for odd/even mdcts as "positional encodings"
         # zarr = (np.arange(inputs.shape[1])%2).astype('float')
         # zarr[zarr == 0] = -1
@@ -86,6 +105,71 @@ class PLCLoader_shape(Sequence):
 
     def __len__(self):
         return self.nb_batches
+
+# class PLCLoader_shape(Sequence):
+#     # Expects concatenated energy and unit vectors as features
+#     def __init__(self, features_mdct,features_E, seq_size,batch_size,choice = 0,lost = 0):
+#         self.batch_size = batch_size
+#         self.seq_size = seq_size
+#         self.nb_batches = features_mdct.shape[0]//self.batch_size
+#         self.features_mdct = features_mdct[:self.nb_batches*self.batch_size, :, :]
+#         self.features_E = features_E[:self.nb_batches*self.batch_size, :, :]
+#         self.lost = lost.astype('float')
+#         self.lost = np.ones_like(self.lost)
+#         self.lost = self.lost[:(len(self.lost)//seq_size-1)*seq_size]
+#         self.on_epoch_end()
+#         self.choice = choice
+
+#     def on_epoch_end(self):
+#         self.indices = np.arange(self.nb_batches*self.batch_size)
+#         np.random.shuffle(self.indices)
+#         offset = np.random.randint(0, high=self.seq_size)
+#         self.lost_offset = np.reshape(self.lost[offset:-self.seq_size+offset], (-1, self.seq_size))
+#         self.lost_indices = np.random.randint(0, high=self.lost_offset.shape[0], size=self.nb_batches*self.batch_size)
+
+#     def __getitem__(self, index):
+#         features_mdct = self.features_mdct[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
+#         features_E = self.features_E[self.indices[index*self.batch_size:(index+1)*self.batch_size], :, :]
+#         lost = self.lost_offset[self.lost_indices[index*self.batch_size:(index+1)*self.batch_size], :]
+#         lost = np.reshape(lost, (features_mdct.shape[0], features_mdct.shape[1], 1))
+#         lost_mask = np.tile(lost, (1,1,features_mdct.shape[2]))
+#         # features = np.concatenate((features_mdct,features_E),axis = -1)
+#         # inputs = features_mdct[:,:2,:].squeeze()
+#         # inputs = inputs.reshape(self.batch_size,2*inputs.shape[-1]) #Feedforward
+#         # inputs = inputs.reshape(self.batch_size,1,2,inputs.shape[-1]) #CNN
+#         # outputs = features_mdct[:,2:,:].squeeze()
+#         # print(inputs.shape,outputs.shape)
+#         # inputs = features_mdct.reshape(self.batch_size,features_mdct.shape[-1],self.seq_size,1) #CNN
+#         inputs = np.expand_dims(np.transpose(features_mdct*lost_mask,[0,2,1]),-1)
+#         outputs = np.roll(np.transpose(features_mdct,[0,2,1]),-2,-1)
+
+#         # inputs = [inputs,np.expand_dims(lost.transpose([0,2,1]),-1)]
+#         out_lost = np.copy(lost)
+#         out_lost[:,1:,:] = out_lost[:,1:,:]*out_lost[:,:-1,:]
+#         out_lost = out_lost.transpose([0,2,1])
+#         # print(out_lost[out_lost == 1])
+#         outputs = np.concatenate([outputs, 1.-out_lost], axis=1)
+#         # print(np.linalg.norm(inputs))
+#         # Augment 0,1 for odd/even mdcts as "positional encodings"
+#         # zarr = (np.arange(inputs.shape[1])%2).astype('float')
+#         # zarr[zarr == 0] = -1
+#         # zarr = np.stack([zarr for i in range(self.seq_size)])
+#         # zarr = zarr.transpose([1,0])
+#         # zarr = np.stack([zarr for i in range(self.batch_size)],0)
+#         # zarr = np.expand_dims(zarr,-1)
+#         # inputs = np.concatenate([inputs,zarr],-1)
+#         # inputs = inputs*zarr
+#         # outputs = inputs.squeeze()
+#         # print(inputs.shape,outputs.shape)
+#         if self.choice == 0:
+#             return (inputs, outputs)
+#         else:
+#             # outputs = np.concatenate([features_E,np.transpose(outputs,[0,2,1])],-1)
+#             # print(inputs.shape,outputs.shape)
+#             return (inputs, features_E, outputs)
+
+#     def __len__(self):
+#         return self.nb_batches
 
 # class PLCLoader(Sequence):
 #     def __init__(self, features, lost, nb_burg_features, batch_size):

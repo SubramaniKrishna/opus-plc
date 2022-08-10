@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
 
 import argparse
 from plc_loader import *
@@ -49,6 +49,7 @@ import h5py
 import tensorflow as tf
 gpus = tf.config.experimental.list_physical_devices('GPU')
 import tensorflow_io as tfio
+from soft_smooth import *
 #if gpus:
 #  try:
 #    tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=5120)])
@@ -68,7 +69,7 @@ if quantize:
     decay = 0
     input_model = args.quantize
 else:
-    lr = 1.0e-2
+    lr = 1.0e-3
     decay = 0
 
 if args.lr is not None:
@@ -97,8 +98,10 @@ band_defs = np.array([0,  1,  2,  3,  4,  5,  6,  7,  8, 10, 12, 14, 16, 20, 24,
 # band_defs = np.array([0,1])*8
 def plc_mdctshape_loss_bandwise(alpha,band_defs):
     def loss(y_true,y_pred):
+        mask = y_true[:,-1:,:]
+        y_true = y_true[:,:-1,:]
         e = (y_pred - y_true)
-        abs_e = K.abs(y_pred) - K.abs(y_true)
+        abs_e = (K.abs(y_pred) - K.abs(y_true))
         rms_loss = 0
         abs_rms = 0
         # print(y_pred.shape)
@@ -106,11 +109,26 @@ def plc_mdctshape_loss_bandwise(alpha,band_defs):
         # bw = bw/bw.sum()
         for i in range(band_defs.shape[0] - 1):
             rms_loss+= K.sqrt(K.sum(K.square(e[:,band_defs[i] - band_defs[0]:band_defs[i+1] - band_defs[0],:]),axis = 1))
+            # rms_loss+= K.sum(K.square(e[:,band_defs[i] - band_defs[0]:band_defs[i+1] - band_defs[0],:]),axis = 1)
             abs_rms+= K.sqrt(K.sum(K.square(abs_e[:,band_defs[i] - band_defs[0]:band_defs[i+1] - band_defs[0],:]),axis = 1))
         # rms_loss = K.tanh(K.mean(rms_loss)/2)
         rms_loss = K.mean(rms_loss)
         abs_rms = K.mean(abs_rms)
         return ((1 - alpha)*rms_loss + alpha*abs_rms)
+    return loss
+
+def plc_mdctshape_nll():
+    def loss(y_true,y_pred):
+        mask = y_true[:,-1:,:]
+        y_true = y_true[:,:-1,:]
+        mu_pred = y_pred[:,:,:,0]
+        log_sigma_pred = y_pred[:,:,:,1]
+        sigma_pred = K.exp(log_sigma_pred)
+        # nll = 0
+        # for i in range(band_defs.shape[0] - 1):
+        nll = K.sum(2*0.5*log_sigma_pred,axis = 1) + K.sum(((0.5*K.square(mu_pred - y_true))/K.square(sigma_pred)),axis = 1)
+        # nll += K.sum(0.5*log_sigma_pred,axis = 1)
+        return K.mean(nll)
     return loss
 
 def plc_mdctshape_spectralloss():
@@ -205,8 +223,10 @@ opt = Adam(lr, decay=decay, beta_2=0.99)
 # model = lpcnet.plc_shape(nb_cepstral_features = int(band_defs[-1] - band_defs[0]),batch_size=batch_size, cond_size=args.cond_size, band_defs = band_defs)
 # model = lpcnet.plc_shape_cnn(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs)
 # model = lpcnet.plc_shape_dense(nb_cepstral_features = int(band_defs[-1] - band_defs[0]),batch_size=batch_size, cond_size=args.cond_size, band_defs = band_defs) # Dense
-model = lpcnet.plc_shape_cnnfull(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs) # CNN
-model.compile(optimizer=opt, loss=plc_mdctshape_loss_bandwise(0.0,band_defs), metrics = [plcmdct_metric]) #Bandwise CNN Loss
+# model = lpcnet.plc_shape_cnnfull(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs) # CNN
+model = lpcnet.plc_shape_cnnsmoothed(nb_cepstral_features = int(band_defs[-1] - band_defs[0]), batch_size=batch_size, band_defs = band_defs) # Jan Smoothing
+# model.compile(optimizer=opt, loss=plc_mdctshape_loss_bandwise(0.0,band_defs)) #Bandwise CNN Loss
+model.compile(optimizer=opt, loss=plc_mdctshape_nll()) # Jan Spectral Shaping Loss (MSE)
 # model.compile(optimizer=opt, loss=plc_mdctshape_spectralloss(), metrics = [plcmdct_metric]) #Spectral Loss
 # model.compile(optimizer=opt, loss=plc_mdct_loss())
 model.summary()
@@ -236,7 +256,7 @@ nb_features = 21
 
 # features = features[:, :, :nb_used_features+model.nb_burg_features]
 
-# lost = np.memmap(args.lost_file, dtype='int8', mode='r')
+lost = np.memmap(args.lost_file, dtype='int8', mode='r')
 
 features_E = np.memmap(feature_file_logE, dtype='float32', mode='r')
 features_mdct = np.memmap(feature_file_mdct, dtype='float32', mode='r')
@@ -246,12 +266,13 @@ nb_features_cepstral = 960
 nb_sequences_shape = len(features_mdct)//(nb_features_cepstral*sequence_size_shape)//batch_size*batch_size
 features_mdct = features_mdct[:nb_sequences_shape*sequence_size_shape*nb_features_cepstral]
 features_mdct = np.reshape(features_mdct, (nb_sequences_shape, sequence_size_shape, nb_features_cepstral))
-features_mdct = features_mdct[:(int)(1*nb_sequences_shape), :, band_defs[0]:band_defs[-1]]
+features_mdct = features_mdct[:(int)(0.1*nb_sequences_shape), :, band_defs[0]:band_defs[-1]] # CNN
+# features_mdct = features_mdct[:(int)(1*nb_sequences_shape), :, :] # Jansmooth
 
 nb_sequences_E = len(features_E)//(nb_features*sequence_size_shape)//batch_size*batch_size
 features_E = features_E[:nb_sequences_E*sequence_size_shape*nb_features]
 features_E = np.reshape(features_E, (nb_sequences_E, sequence_size_shape, nb_features))
-features_E = features_E[:(int)(1*nb_sequences_E), :, :]
+features_E = features_E[:(int)(0.1*nb_sequences_E), :, :]
 # print(nb_sequences_shape,nb_sequences_E)
 # features_inp_shape = np.concatenate((features_mdct,features_E),axis = -1)
 
@@ -261,7 +282,9 @@ features_E = features_E[:(int)(1*nb_sequences_E), :, :]
 
 # features = features[:, :, :nb_used_features+model.nb_burg_features]
 
-
+# Jan's Normalization Scheme
+print("Jan Normalization", features_mdct.shape)
+features_mdct_smooth = shape_spectrum((features_E + ebandMeans[:21]),features_mdct,2,8)
 # dump models to disk as we go
 checkpoint = ModelCheckpoint('{}_{}_{}_{}.h5'.format(args.output, args.gru_size, args.cond_size, '{epoch:02d}'), save_freq = "epoch")
 
@@ -275,7 +298,7 @@ checkpoint = ModelCheckpoint('{}_{}_{}_{}.h5'.format(args.output, args.gru_size,
 model.save_weights('{}_{}_{}_initial.h5'.format(args.output, args.gru_size, args.cond_size))
 # print(features_E.shape,features_mdct.shape)
 # loader = PLCLoader(features, lost, nb_burg_features, batch_size)
-loader = PLCLoader_shape(features_mdct,features_E,sequence_size_shape,batch_size,0)
+loader = PLCLoader_shape(features_mdct_smooth,features_E,sequence_size_shape,batch_size,0,lost)
 
 csv_logger = CSVLogger('train_loss.csv', append=False, separator=',')
 callbacks = [checkpoint, csv_logger]
