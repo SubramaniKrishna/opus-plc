@@ -32,7 +32,7 @@
 #endif
 
 #define CELT_ENCODER_C
-
+#include <stdio.h>
 #include "cpu_support.h"
 #include "os_support.h"
 #include "mdct.h"
@@ -404,7 +404,8 @@ static int transient_analysis(const opus_val32 * OPUS_RESTRICT in, int len, int 
    is_transient = rand()&0x1;
 #endif
    /*printf("%d %f %d\n", is_transient, (float)*tf_estimate, tf_max);*/
-   return is_transient;
+   // return is_transient;
+   return 0;
 }
 
 /* Looks for sudden increases of energy to decide whether we need to patch
@@ -1740,6 +1741,14 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_val16 * pcm, 
       }
    }
    amp2Log2(mode, effEnd, end, bandE, bandLogE, C);
+   FILE *fp;
+   fp = fopen("comp_mono_raw_48k_bandLogE","a");
+   for(int z = 0; z < 21; z++){
+      // fprintf(fp,"%f",bandLogE[z]);
+      fwrite( &bandLogE[z], 1, sizeof(bandLogE[z]),fp ) ;
+   }
+   // fprintf(fp,"\n");
+   fclose(fp);
 
    ALLOC(surround_dynalloc, C*nbEBands, opus_val16);
    OPUS_CLEAR(surround_dynalloc, end);
@@ -1869,6 +1878,14 @@ int celt_encode_with_ec(CELTEncoder * OPUS_RESTRICT st, const opus_val16 * pcm, 
 
    /* Band normalisation */
    normalise_bands(mode, freq, X, bandE, effEnd, C, M);
+   FILE *fp1;
+   fp1 = fopen("comp_mono_raw_48k_mdctnormalized","a");
+   for(int z = 0; z < 960; z++){
+      // fprintf(fp1,"%f",X[z]);
+      fwrite( &X[z], 1, sizeof(X[z]),fp1 ) ;
+   }
+   // fprintf(fp1,"\n");
+   fclose(fp1);
 
    enable_tf_analysis = effectiveBytes>=15*C && !hybrid && st->complexity>=2 && !st->lfe;
 
